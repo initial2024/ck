@@ -1,0 +1,3 @@
+- insert:
+    - id: web-relay-toolcall-compat
+      name: dsh-web-relay-toolcall-compat
