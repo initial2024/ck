@@ -1,5 +1,5 @@
 export const name = 'dsh-web-relay-toolcall-compat'
-export const inject = ['llm']
+export const inject = ['llm', 'tools', 'agents']
 
 const CALL_PREFIX = '助手请求调用工具（'
 const RETURN_PREFIX = '工具返回（'
@@ -11,9 +11,33 @@ function isPlainObject(value) {
   return value !== null && typeof value === 'object' && !Array.isArray(value)
 }
 
-function visibleToolNames(options) {
-  if (!Array.isArray(options?.tools)) return new Set()
-  return new Set(options.tools.map(tool => tool?.name).filter(name => typeof name === 'string' && name.length > 0))
+function visibleToolNames(options, registeredNames = []) {
+  const names = new Set(registeredNames)
+  if (!Array.isArray(options?.tools)) return names
+  for (const tool of options.tools) {
+    const name = tool?.name
+    if (typeof name === 'string' && name.length > 0) names.add(name)
+  }
+  return names
+}
+
+function registryVisibleToolNames(ctx, options) {
+  const names = new Set()
+  let agent
+  try {
+    if (options?.sessionId !== undefined) agent = ctx.agents.get(options.sessionId)
+  } catch {
+    agent = undefined
+  }
+  try {
+    for (const tool of ctx.tools.schemas(agent)) {
+      const name = tool?.name
+      if (typeof name === 'string' && name.length > 0) names.add(name)
+    }
+  } catch {
+    // Registry fallback is best-effort. The request-local tool list remains authoritative when available.
+  }
+  return names
 }
 
 function stableId(name, argumentsJson, index) {
@@ -37,9 +61,9 @@ function normalizeArguments(value) {
   }
 }
 
-function validateCalls(rawCalls, options) {
+function validateCalls(rawCalls, options, registeredNames = []) {
   if (!Array.isArray(rawCalls) || rawCalls.length === 0) return null
-  const allowed = visibleToolNames(options)
+  const allowed = visibleToolNames(options, registeredNames)
   if (allowed.size === 0) return null
   const ids = new Set()
   const calls = []
@@ -57,7 +81,7 @@ function validateCalls(rawCalls, options) {
   return calls
 }
 
-function parseLegacyToolCalls(text, options) {
+function parseLegacyToolCalls(text, options, registeredNames = []) {
   const lines = text.replace(/\r\n?/g, '\n').split('\n').map(line => line.trim()).filter(Boolean)
   if (lines.length === 0) return null
   if (lines.some(line => line.startsWith(RETURN_PREFIX))) return null
@@ -76,7 +100,7 @@ function parseLegacyToolCalls(text, options) {
     }
     rawCalls.push({ name, id, arguments: argumentsValue })
   }
-  const calls = validateCalls(rawCalls, options)
+  const calls = validateCalls(rawCalls, options, registeredNames)
   return calls === null ? null : { calls, prose: '' }
 }
 
@@ -86,7 +110,7 @@ function stripJsonFence(value) {
   return match ? match[1] : trimmed
 }
 
-function parseTaggedToolCalls(text, options) {
+function parseTaggedToolCalls(text, options, registeredNames = []) {
   const open = text.indexOf(TOOL_CALLS_OPEN)
   if (open === -1) return null
   const close = text.indexOf(TOOL_CALLS_CLOSE, open + TOOL_CALLS_OPEN.length)
@@ -101,7 +125,7 @@ function parseTaggedToolCalls(text, options) {
   } catch {
     return null
   }
-  const calls = validateCalls(rawCalls, options)
+  const calls = validateCalls(rawCalls, options, registeredNames)
   if (calls === null) return null
 
   const before = text.slice(0, open).trim()
@@ -110,8 +134,9 @@ function parseTaggedToolCalls(text, options) {
   return { calls, prose }
 }
 
-function parseToolCallText(text, options) {
-  return parseLegacyToolCalls(text, options) ?? parseTaggedToolCalls(text, options)
+function parseToolCallText(text, options, registeredNames = []) {
+  return parseLegacyToolCalls(text, options, registeredNames)
+    ?? parseTaggedToolCalls(text, options, registeredNames)
 }
 
 function collectCompletedText(chunks) {
@@ -160,7 +185,7 @@ function maxBlockIndex(chunks) {
   return max
 }
 
-function transform(chunks, options) {
+function transform(chunks, options, registeredNames = []) {
   if (hasNativeToolCall(chunks)) return chunks
 
   const finish = terminalFinish(chunks)
@@ -169,7 +194,7 @@ function transform(chunks, options) {
   const text = collectCompletedText(chunks)
   if (text === null) return chunks
 
-  const parsed = parseToolCallText(text, options)
+  const parsed = parseToolCallText(text, options, registeredNames)
   if (parsed === null) return chunks
 
   const out = []
@@ -205,7 +230,8 @@ export function apply(ctx) {
   ctx.on('llm/stream', async function* (options, next) {
     const chunks = []
     for await (const chunk of next()) chunks.push(chunk)
-    for (const chunk of transform(chunks, options)) yield chunk
+    const registeredNames = registryVisibleToolNames(ctx, options)
+    for (const chunk of transform(chunks, options, registeredNames)) yield chunk
   }, { global: true, prepend: true })
 }
 
@@ -213,5 +239,6 @@ export const _test = {
   parseLegacyToolCalls,
   parseTaggedToolCalls,
   parseToolCallText,
+  registryVisibleToolNames,
   transform,
 }
