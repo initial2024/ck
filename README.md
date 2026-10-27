@@ -29,7 +29,7 @@ The JSON array may be wrapped in a `json` code fence. Calls without an `id` rece
 
 ## Safety / strictness
 
-Conversion only occurs when all calls validate against the current request's visible `options.tools` list. The compatibility layer refuses conversion for malformed JSON, non-object arguments, duplicate ids, hidden/unknown tool names, duplicate tagged blocks, forged textual `工具返回（...）` output, existing native DSH tool calls, or non-`stop` terminal finishes such as truncation/error.
+Conversion validates tool names against the union of the current request's native `options.tools` list and the live DSH Tool Registry view for the current session's Agent (`ctx.tools.schemas(agent)`). This lets text-only/web-relay routes use tools that are genuinely registered in DSH even when the relay did not carry a complete native tool list. The compatibility layer refuses conversion for malformed JSON, non-object arguments, duplicate ids, hidden/unknown tool names, duplicate tagged blocks, forged textual `工具返回（...）` output, existing native DSH tool calls, or non-`stop` terminal finishes such as truncation/error.
 
 Rejected content passes through unchanged as ordinary model output. This prevents arbitrary text from silently becoming executable tool activity.
 
@@ -43,7 +43,7 @@ Some Android DSH builds cannot execute `git` and fail GitHub installs with `spaw
 https://github.com/initial2024/ck/archive/refs/heads/main.tar.gz
 ```
 
-Paste that exact plain-text URL into **Add plugin → package name or address**. Do not append query parameters. If version 0.1.0 is already installed, uninstall it first, install 0.2.0, then enable/restart the Web profile as requested by DSH.
+Paste that exact plain-text URL into **Add plugin → package name or address**. Do not append query parameters. If an older version is already installed, uninstall it first, install 0.3.0, then enable/restart the Web profile as requested by DSH.
 
 ## Important boundary
 
@@ -51,4 +51,4 @@ This bundle intercepts the DSH `llm/stream` seam. If a relay bypasses `llm/strea
 
 ## Version
 
-`0.2.0`
+`0.3.0`
