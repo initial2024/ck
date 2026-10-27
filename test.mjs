@@ -41,6 +41,23 @@ const stream = text => [
   const out = _test.transform(stream(text), options)
   assert.equal(out.at(-1).reason.kind, 'tool-calls')
 }
+
+{
+  const text = '<tool_calls>[{"name":"bubble","arguments":{"action":"set","state":"collapsed"}},{"name":"bash","arguments":{"command":"echo ok"}}]</tool_calls>'
+  const out = _test.transform(stream(text), { sessionId: 'web-session' }, ['bubble', 'bash'])
+  assert.equal(out.at(-1).reason.kind, 'tool-calls')
+  const calls = out.filter(x => x.type === 'block-end' && x.block?.type === 'tool-call')
+  assert.equal(calls.length, 2)
+  assert.equal(calls[0].block.name, 'bubble')
+  assert.equal(calls[1].block.name, 'bash')
+}
+{
+  const text = '<tool_calls>[{"name":"not_registered","arguments":{}}]</tool_calls>'
+  const original = stream(text)
+  const out = _test.transform(original, { sessionId: 'web-session' }, ['bubble', 'bash'])
+  assert.deepEqual(out, original)
+}
+
 for (const text of [
   '助手请求调用工具（name=skill, id=a）：not-json',
   '助手请求调用工具（name=skill, id=a）：[]',
