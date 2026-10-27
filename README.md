@@ -37,10 +37,10 @@ The middleware consumes downstream `llm/stream` once and is registered with `{ g
 
 ## Android-friendly installation
 
-Some Android DSH builds cannot execute `git` and fail GitHub installs with `spawn git EACCES`. Use the prepacked tarball instead:
+Some Android DSH builds cannot execute `git` and fail GitHub installs with `spawn git EACCES`. Use the GitHub source tarball instead:
 
 ```text
-https://raw.githubusercontent.com/initial2024/ck/main/dist/dsh-web-relay-toolcall-compat-0.2.0.tgz
+https://github.com/initial2024/ck/archive/refs/heads/main.tar.gz
 ```
 
 Paste that exact plain-text URL into **Add plugin → package name or address**. Do not append query parameters. If version 0.1.0 is already installed, uninstall it first, install 0.2.0, then enable/restart the Web profile as requested by DSH.
