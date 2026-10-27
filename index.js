@@ -301,12 +301,16 @@ function maxBlockIndex(chunks) {
 }
 
 function transform(chunks, options, registeredSchemas = []) {
-  if (hasNativeToolCall(chunks)) return transformNativeToolCalls(chunks, options, registeredSchemas)
-
-  const finish = terminalFinish(chunks)
-  if (!finish || finish.reason?.kind !== 'stop') return chunks
-
+  const nativePresent = hasNativeToolCall(chunks)
   const text = collectCompletedText(chunks)
+  const finish = terminalFinish(chunks)
+
+  if (nativePresent && (text === null || !text.includes(TOOL_CALLS_OPEN))) {
+    return transformNativeToolCalls(chunks, options, registeredSchemas)
+  }
+
+  if (!finish || !['stop', 'tool-calls'].includes(finish.reason?.kind)) return chunks
+
   if (text === null) return chunks
 
   const parsed = parseToolCallText(text, options, registeredSchemas)
