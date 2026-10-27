@@ -51,7 +51,7 @@ This bundle intercepts the DSH `llm/stream` seam. If a relay bypasses `llm/strea
 
 ## Version
 
-`0.5.0`
+`0.6.0`
 
 
 ## v0.4 partial-batch policy
@@ -89,3 +89,18 @@ For a native batch:
 - the feedback result is returned to the model on the next turn.
 
 This closes the gap where an invalid native tool call could previously be silently dropped downstream or fail the whole turn with `PI_AI_ERROR: model produced an invalid tool call`.
+
+
+## v0.6 mixed-stream handling
+
+Some Web Gateway responses can contain both native DSH tool calls and a textual `<tool_calls>...</tool_calls>` block in the same LLM stream. Earlier versions prioritized the native branch and leaked the tagged text into the conversation.
+
+v0.6 merges both representations safely:
+- accepted native calls remain authoritative;
+- textual duplicates of an accepted native call are suppressed with `duplicate_of_native_call`;
+- additional valid textual calls are converted to native calls;
+- unavailable or schema-invalid textual/native calls are skipped;
+- all skipped reasons are merged into one `web_relay_compat_feedback` call;
+- raw `<tool_calls>` text is removed from the final conversation stream.
+
+Regression coverage now includes text-only, native-only, and mixed native+text batches.
