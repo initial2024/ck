@@ -320,6 +320,7 @@ function transform(chunks, options, registeredSchemas = []) {
   const usage = []
   for (const chunk of chunks) {
     if (isTextChunk(chunk) || chunk?.type === 'finish') continue
+    if (nativePresent && isNativeToolChunk(chunk) && !acceptedNativeIndexes.has(chunk.index)) continue
     if (isUsageChunk(chunk)) {
       usage.push(chunk)
       continue
@@ -334,8 +335,8 @@ function transform(chunks, options, registeredSchemas = []) {
     out.push({ type: 'block-end', index, block: { type: 'text', text: parsed.prose } })
     index += 1
   }
-  const executableCalls = [...parsed.calls]
-  const feedback = feedbackCall(parsed.skipped)
+  const executableCalls = [...textCalls]
+  const feedback = feedbackCall(mergedSkipped)
   if (feedback !== null) executableCalls.push(feedback)
 
   for (const call of executableCalls) {
@@ -399,6 +400,7 @@ export const _test = {
   parseToolCallText,
   registryVisibleToolSchemas,
   feedbackCall,
+  normalizedCallKey,
   collectNativeToolCalls,
   transformNativeToolCalls,
   transform,
