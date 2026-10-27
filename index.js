@@ -323,11 +323,37 @@ function transform(chunks, options, registeredSchemas = []) {
   }
 
   if (!finish || !['stop', 'tool-calls'].includes(finish.reason?.kind)) return chunks
-
   if (text === null) return chunks
 
   const parsed = parseToolCallText(text, options, registeredSchemas)
   if (parsed === null) return chunks
+
+  const nativeValidated = nativePresent
+    ? validateCalls(collectNativeToolCalls(chunks), options, registeredSchemas)
+    : null
+
+  const acceptedNativeIndexes = new Set(
+    (nativeValidated?.calls || [])
+      .map(call => call.streamIndex)
+      .filter(Number.isInteger),
+  )
+  const acceptedNativeIds = new Set((nativeValidated?.calls || []).map(call => call.id))
+  const acceptedNativeKeys = new Set((nativeValidated?.calls || []).map(normalizedCallKey))
+
+  const mergedSkipped = [...(nativeValidated?.skipped || []), ...parsed.skipped]
+  const textCalls = []
+
+  for (const call of parsed.calls) {
+    if (acceptedNativeIds.has(call.id) || acceptedNativeKeys.has(normalizedCallKey(call))) {
+      mergedSkipped.push({
+        index: call.sourceIndex ?? -1,
+        name: call.name,
+        reason: 'duplicate_of_native_call',
+      })
+      continue
+    }
+    textCalls.push(call)
+  }
 
   const out = []
   const usage = []
@@ -342,12 +368,14 @@ function transform(chunks, options, registeredSchemas = []) {
   }
 
   let index = maxBlockIndex(out) + 1
+
   if (parsed.prose.length > 0) {
     out.push({ type: 'block-start', index, blockType: 'text' })
     out.push({ type: 'text-delta', index, text: parsed.prose })
     out.push({ type: 'block-end', index, block: { type: 'text', text: parsed.prose } })
     index += 1
   }
+
   const executableCalls = [...textCalls]
   const feedback = feedbackCall(mergedSkipped)
   if (feedback !== null) executableCalls.push(feedback)
@@ -358,6 +386,7 @@ function transform(chunks, options, registeredSchemas = []) {
     out.push({ type: 'block-end', index, block: { type: 'tool-call', id: call.id, name: call.name, arguments: call.arguments } })
     index += 1
   }
+
   out.push(...usage)
   out.push({ type: 'finish', reason: { kind: 'tool-calls' } })
   return out
