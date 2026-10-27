@@ -6,6 +6,7 @@ const RETURN_PREFIX = '工具返回（'
 const CALL_LINE = /^助手请求调用工具（name=([^,（）\s]+),\s*id=([^（）\s]+)）：\s*(\{.*\})$/u
 const TOOL_CALLS_OPEN = '<tool_calls>'
 const TOOL_CALLS_CLOSE = '</tool_calls>'
+const FEEDBACK_TOOL = 'web_relay_compat_feedback'
 
 function isPlainObject(value) {
   return value !== null && typeof value === 'object' && !Array.isArray(value)
@@ -64,23 +65,57 @@ function normalizeArguments(value) {
 function validateCalls(rawCalls, options, registeredNames = []) {
   if (!Array.isArray(rawCalls) || rawCalls.length === 0) return null
   const allowed = visibleToolNames(options, registeredNames)
-  if (allowed.size === 0) return null
   const ids = new Set()
   const calls = []
+  const skipped = []
   for (let index = 0; index < rawCalls.length; index += 1) {
     const item = rawCalls[index]
-    if (!isPlainObject(item) || typeof item.name !== 'string' || item.name.length === 0) return null
-    if (!allowed.has(item.name)) return null
+    if (!isPlainObject(item)) {
+      skipped.push({ index, name: '(invalid)', reason: 'call_not_object' })
+      continue
+    }
+    const name = typeof item.name === 'string' ? item.name.trim() : ''
+    if (!name) {
+      skipped.push({ index, name: '(missing)', reason: 'missing_tool_name' })
+      continue
+    }
+    if (name === FEEDBACK_TOOL) {
+      skipped.push({ index, name, reason: 'reserved_internal_tool' })
+      continue
+    }
+    if (!allowed.has(name)) {
+      skipped.push({ index, name, reason: 'tool_not_available' })
+      continue
+    }
     const argumentsJson = normalizeArguments(item.arguments)
-    if (argumentsJson === null) return null
-    const id = item.id === undefined ? stableId(item.name, argumentsJson, index) : item.id
-    if (typeof id !== 'string' || id.length === 0 || ids.has(id)) return null
+    if (argumentsJson === null) {
+      skipped.push({ index, name, reason: 'arguments_not_object' })
+      continue
+    }
+    const id = item.id === undefined ? stableId(name, argumentsJson, index) : item.id
+    if (typeof id !== 'string' || id.length === 0) {
+      skipped.push({ index, name, reason: 'invalid_call_id' })
+      continue
+    }
+    if (ids.has(id)) {
+      skipped.push({ index, name, reason: 'duplicate_call_id' })
+      continue
+    }
     ids.add(id)
-    calls.push({ name: item.name, id, arguments: argumentsJson })
+    calls.push({ name, id, arguments: argumentsJson })
   }
-  return calls
+  return { calls, skipped }
 }
 
+function feedbackCall(skipped) {
+  if (!Array.isArray(skipped) || skipped.length === 0) return null
+  const argumentsJson = JSON.stringify({ skipped })
+  return {
+    name: FEEDBACK_TOOL,
+    id: stableId(FEEDBACK_TOOL, argumentsJson, 999999),
+    arguments: argumentsJson,
+  }
+}
 function parseLegacyToolCalls(text, options, registeredNames = []) {
   const lines = text.replace(/\r\n?/g, '\n').split('\n').map(line => line.trim()).filter(Boolean)
   if (lines.length === 0) return null
@@ -100,8 +135,8 @@ function parseLegacyToolCalls(text, options, registeredNames = []) {
     }
     rawCalls.push({ name, id, arguments: argumentsValue })
   }
-  const calls = validateCalls(rawCalls, options, registeredNames)
-  return calls === null ? null : { calls, prose: '' }
+  const validated = validateCalls(rawCalls, options, registeredNames)
+  return validated === null ? null : { ...validated, prose: '' }
 }
 
 function stripJsonFence(value) {
@@ -125,13 +160,13 @@ function parseTaggedToolCalls(text, options, registeredNames = []) {
   } catch {
     return null
   }
-  const calls = validateCalls(rawCalls, options, registeredNames)
-  if (calls === null) return null
+  const validated = validateCalls(rawCalls, options, registeredNames)
+  if (validated === null) return null
 
   const before = text.slice(0, open).trim()
   const after = text.slice(close + TOOL_CALLS_CLOSE.length).trim()
   const prose = [before, after].filter(Boolean).join('\n\n')
-  return { calls, prose }
+  return { ...validated, prose }
 }
 
 function parseToolCallText(text, options, registeredNames = []) {
@@ -215,7 +250,11 @@ function transform(chunks, options, registeredNames = []) {
     out.push({ type: 'block-end', index, block: { type: 'text', text: parsed.prose } })
     index += 1
   }
-  for (const call of parsed.calls) {
+  const executableCalls = [...parsed.calls]
+  const feedback = feedbackCall(parsed.skipped)
+  if (feedback !== null) executableCalls.push(feedback)
+
+  for (const call of executableCalls) {
     out.push({ type: 'block-start', index, blockType: 'tool-call' })
     out.push({ type: 'tool-call-delta', index, id: call.id, name: call.name, argumentsDelta: call.arguments })
     out.push({ type: 'block-end', index, block: { type: 'tool-call', id: call.id, name: call.name, arguments: call.arguments } })
@@ -227,6 +266,40 @@ function transform(chunks, options, registeredNames = []) {
 }
 
 export function apply(ctx) {
+  ctx.tools.register({
+    name: FEEDBACK_TOOL,
+    description: 'Internal Web Relay compatibility feedback. Do not call this tool directly.',
+    parameters: {
+      type: 'object',
+      properties: {
+        skipped: {
+          type: 'array',
+          items: {
+            type: 'object',
+            properties: {
+              index: { type: 'number' },
+              name: { type: 'string' },
+              reason: { type: 'string' },
+            },
+            required: ['index', 'name', 'reason'],
+            additionalProperties: false,
+          },
+        },
+      },
+      required: ['skipped'],
+      additionalProperties: false,
+    },
+    output: {
+      schema: { type: 'string' },
+      render(_args, value) { return [{ type: 'text', text: String(value) }] },
+    },
+    async execute(args) {
+      const rows = Array.isArray(args?.skipped) ? args.skipped : []
+      const detail = rows.map(item => `${item.name}: ${item.reason}`).join('; ')
+      return `Web Relay compatibility skipped ${rows.length} tool call(s). ${detail}. Continue with the tool results that did execute, and choose another approach for skipped calls.`
+    },
+  })
+
   ctx.on('llm/stream', async function* (options, next) {
     const chunks = []
     for await (const chunk of next()) chunks.push(chunk)
@@ -240,5 +313,6 @@ export const _test = {
   parseTaggedToolCalls,
   parseToolCallText,
   registryVisibleToolNames,
+  feedbackCall,
   transform,
 }
