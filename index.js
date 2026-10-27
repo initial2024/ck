@@ -215,7 +215,20 @@ function hasNativeToolCall(chunks) {
     || (chunk?.type === 'block-end' && chunk.block?.type === 'tool-call'))
 }
 
-function normalizedCallKey(call) {\n  let args = call?.arguments\n  try {\n    args = typeof args === 'string' ? JSON.parse(args) : args\n    if (isPlainObject(args)) {\n      const ordered = {}\n      for (const key of Object.keys(args).sort()) ordered[key] = args[key]\n      args = ordered\n    }\n  } catch {}\n  return String(call?.name || '') + '\n' + JSON.stringify(args)\n}\nfunction collectNativeToolCalls(chunks) {
+function normalizedCallKey(call) {
+  let args = call?.arguments
+  try {
+    args = typeof args === 'string' ? JSON.parse(args) : args
+    if (isPlainObject(args)) {
+      const ordered = {}
+      for (const key of Object.keys(args).sort()) ordered[key] = args[key]
+      args = ordered
+    }
+  } catch {}
+  return String(call?.name || '') + '\n' + JSON.stringify(args)
+}
+
+function collectNativeToolCalls(chunks) {
   const rawCalls = []
   for (const chunk of chunks) {
     if (chunk?.type !== 'block-end' || chunk.block?.type !== 'tool-call') continue
