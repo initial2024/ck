@@ -248,7 +248,7 @@ function transformNativeToolCalls(chunks, options, registeredSchemas = []) {
       .filter(Number.isInteger),
   )
 
-  const nativeValidated = nativePresent\n    ? validateCalls(collectNativeToolCalls(chunks), options, registeredSchemas)\n    : null\n  const acceptedNativeIndexes = new Set((nativeValidated?.calls || []).map(call => call.streamIndex).filter(Number.isInteger))\n  const acceptedNativeIds = new Set((nativeValidated?.calls || []).map(call => call.id))\n  const acceptedNativeKeys = new Set((nativeValidated?.calls || []).map(normalizedCallKey))\n  const mergedSkipped = [...(nativeValidated?.skipped || []), ...parsed.skipped]\n  const textCalls = []\n  for (const call of parsed.calls) {\n    if (acceptedNativeIds.has(call.id) || acceptedNativeKeys.has(normalizedCallKey(call))) {\n      mergedSkipped.push({ index: call.sourceIndex ?? -1, name: call.name, reason: 'duplicate_of_native_call' })\n      continue\n    }\n    textCalls.push(call)\n  }\n\n  const out = []
+  const out = []
   const usage = []
   for (const chunk of chunks) {
     if (chunk?.type === 'finish') continue
