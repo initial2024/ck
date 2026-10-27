@@ -1,3 +1,4 @@
+import { validateJsonSchemaValue } from '@deepseek-ai/dsh-tools'
 export const name = 'dsh-web-relay-toolcall-compat'
 export const inject = ['llm', 'tools', 'agents']
 
@@ -12,18 +13,21 @@ function isPlainObject(value) {
   return value !== null && typeof value === 'object' && !Array.isArray(value)
 }
 
-function visibleToolNames(options, registeredNames = []) {
-  const names = new Set(registeredNames)
-  if (!Array.isArray(options?.tools)) return names
+function visibleToolSchemas(options, registeredSchemas = []) {
+  const schemas = new Map()
+  for (const tool of registeredSchemas) {
+    const name = tool?.name
+    if (typeof name === 'string' && name.length > 0) schemas.set(name, tool)
+  }
+  if (!Array.isArray(options?.tools)) return schemas
   for (const tool of options.tools) {
     const name = tool?.name
-    if (typeof name === 'string' && name.length > 0) names.add(name)
+    if (typeof name === 'string' && name.length > 0) schemas.set(name, tool)
   }
-  return names
+  return schemas
 }
 
-function registryVisibleToolNames(ctx, options) {
-  const names = new Set()
+function registryVisibleToolSchemas(ctx, options) {
   let agent
   try {
     if (options?.sessionId !== undefined) agent = ctx.agents.get(options.sessionId)
@@ -31,14 +35,10 @@ function registryVisibleToolNames(ctx, options) {
     agent = undefined
   }
   try {
-    for (const tool of ctx.tools.schemas(agent)) {
-      const name = tool?.name
-      if (typeof name === 'string' && name.length > 0) names.add(name)
-    }
+    return ctx.tools.schemas(agent)
   } catch {
-    // Registry fallback is best-effort. The request-local tool list remains authoritative when available.
+    return []
   }
-  return names
 }
 
 function stableId(name, argumentsJson, index) {
@@ -52,19 +52,19 @@ function stableId(name, argumentsJson, index) {
 }
 
 function normalizeArguments(value) {
-  if (isPlainObject(value)) return JSON.stringify(value)
+  if (isPlainObject(value)) return { value, json: JSON.stringify(value) }
   if (typeof value !== 'string') return null
   try {
     const parsed = JSON.parse(value)
-    return isPlainObject(parsed) ? JSON.stringify(parsed) : null
+    return isPlainObject(parsed) ? { value: parsed, json: JSON.stringify(parsed) } : null
   } catch {
     return null
   }
 }
 
-function validateCalls(rawCalls, options, registeredNames = []) {
+function validateCalls(rawCalls, options, registeredSchemas = []) {
   if (!Array.isArray(rawCalls) || rawCalls.length === 0) return null
-  const allowed = visibleToolNames(options, registeredNames)
+  const allowed = visibleToolSchemas(options, registeredSchemas)
   const ids = new Set()
   const calls = []
   const skipped = []
@@ -83,15 +83,31 @@ function validateCalls(rawCalls, options, registeredNames = []) {
       skipped.push({ index, name, reason: 'reserved_internal_tool' })
       continue
     }
-    if (!allowed.has(name)) {
+    const toolSchema = allowed.get(name)
+    if (toolSchema === undefined) {
       skipped.push({ index, name, reason: 'tool_not_available' })
       continue
     }
-    const argumentsJson = normalizeArguments(item.arguments)
-    if (argumentsJson === null) {
+    const normalized = normalizeArguments(item.arguments)
+    if (normalized === null) {
       skipped.push({ index, name, reason: 'arguments_not_object' })
       continue
     }
+    const parameterSchema = toolSchema.parameters
+    if (parameterSchema !== undefined) {
+      let violations
+      try {
+        violations = validateJsonSchemaValue(parameterSchema, normalized.value, 'arguments')
+      } catch (error) {
+        skipped.push({ index, name, reason: 'schema_validation_unavailable', detail: String(error?.message || error) })
+        continue
+      }
+      if (violations.length > 0) {
+        skipped.push({ index, name, reason: 'schema_validation_failed', detail: violations.slice(0, 3).join('; ') })
+        continue
+      }
+    }
+    const argumentsJson = normalized.json
     const id = item.id === undefined ? stableId(name, argumentsJson, index) : item.id
     if (typeof id !== 'string' || id.length === 0) {
       skipped.push({ index, name, reason: 'invalid_call_id' })
@@ -116,7 +132,7 @@ function feedbackCall(skipped) {
     arguments: argumentsJson,
   }
 }
-function parseLegacyToolCalls(text, options, registeredNames = []) {
+function parseLegacyToolCalls(text, options, registeredSchemas = []) {
   const lines = text.replace(/\r\n?/g, '\n').split('\n').map(line => line.trim()).filter(Boolean)
   if (lines.length === 0) return null
   if (lines.some(line => line.startsWith(RETURN_PREFIX))) return null
@@ -135,7 +151,7 @@ function parseLegacyToolCalls(text, options, registeredNames = []) {
     }
     rawCalls.push({ name, id, arguments: argumentsValue })
   }
-  const validated = validateCalls(rawCalls, options, registeredNames)
+  const validated = validateCalls(rawCalls, options, registeredSchemas)
   return validated === null ? null : { ...validated, prose: '' }
 }
 
@@ -145,7 +161,7 @@ function stripJsonFence(value) {
   return match ? match[1] : trimmed
 }
 
-function parseTaggedToolCalls(text, options, registeredNames = []) {
+function parseTaggedToolCalls(text, options, registeredSchemas = []) {
   const open = text.indexOf(TOOL_CALLS_OPEN)
   if (open === -1) return null
   const close = text.indexOf(TOOL_CALLS_CLOSE, open + TOOL_CALLS_OPEN.length)
@@ -160,7 +176,7 @@ function parseTaggedToolCalls(text, options, registeredNames = []) {
   } catch {
     return null
   }
-  const validated = validateCalls(rawCalls, options, registeredNames)
+  const validated = validateCalls(rawCalls, options, registeredSchemas)
   if (validated === null) return null
 
   const before = text.slice(0, open).trim()
@@ -169,9 +185,9 @@ function parseTaggedToolCalls(text, options, registeredNames = []) {
   return { ...validated, prose }
 }
 
-function parseToolCallText(text, options, registeredNames = []) {
-  return parseLegacyToolCalls(text, options, registeredNames)
-    ?? parseTaggedToolCalls(text, options, registeredNames)
+function parseToolCallText(text, options, registeredSchemas = []) {
+  return parseLegacyToolCalls(text, options, registeredSchemas)
+    ?? parseTaggedToolCalls(text, options, registeredSchemas)
 }
 
 function collectCompletedText(chunks) {
@@ -220,7 +236,7 @@ function maxBlockIndex(chunks) {
   return max
 }
 
-function transform(chunks, options, registeredNames = []) {
+function transform(chunks, options, registeredSchemas = []) {
   if (hasNativeToolCall(chunks)) return chunks
 
   const finish = terminalFinish(chunks)
@@ -229,7 +245,7 @@ function transform(chunks, options, registeredNames = []) {
   const text = collectCompletedText(chunks)
   if (text === null) return chunks
 
-  const parsed = parseToolCallText(text, options, registeredNames)
+  const parsed = parseToolCallText(text, options, registeredSchemas)
   if (parsed === null) return chunks
 
   const out = []
@@ -304,7 +320,7 @@ export function apply(ctx) {
     const chunks = []
     for await (const chunk of next()) chunks.push(chunk)
     const registeredNames = registryVisibleToolNames(ctx, options)
-    for (const chunk of transform(chunks, options, registeredNames)) yield chunk
+    for (const chunk of transform(chunks, options, registeredSchemas)) yield chunk
   }, { global: true, prepend: true })
 }
 
@@ -312,7 +328,7 @@ export const _test = {
   parseLegacyToolCalls,
   parseTaggedToolCalls,
   parseToolCallText,
-  registryVisibleToolNames,
+  registryVisibleToolSchemas,
   feedbackCall,
   transform,
 }
