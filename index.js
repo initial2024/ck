@@ -118,7 +118,13 @@ function validateCalls(rawCalls, options, registeredSchemas = []) {
       continue
     }
     ids.add(id)
-    calls.push({ name, id, arguments: argumentsJson })
+    calls.push({
+      name,
+      id,
+      arguments: argumentsJson,
+      sourceIndex: index,
+      streamIndex: Number.isInteger(item.streamIndex) ? item.streamIndex : undefined,
+    })
   }
   return { calls, skipped }
 }
@@ -209,6 +215,64 @@ function hasNativeToolCall(chunks) {
     || (chunk?.type === 'block-end' && chunk.block?.type === 'tool-call'))
 }
 
+function collectNativeToolCalls(chunks) {
+  const rawCalls = []
+  for (const chunk of chunks) {
+    if (chunk?.type !== 'block-end' || chunk.block?.type !== 'tool-call') continue
+    rawCalls.push({
+      name: chunk.block.name,
+      id: chunk.block.id,
+      arguments: chunk.block.arguments,
+      streamIndex: chunk.index,
+    })
+  }
+  return rawCalls
+}
+
+function isNativeToolChunk(chunk) {
+  return chunk?.type === 'tool-call-delta'
+    || (chunk?.type === 'block-start' && chunk.blockType === 'tool-call')
+    || (chunk?.type === 'block-end' && chunk.block?.type === 'tool-call')
+}
+
+function transformNativeToolCalls(chunks, options, registeredSchemas = []) {
+  const rawCalls = collectNativeToolCalls(chunks)
+  if (rawCalls.length === 0) return chunks
+
+  const validated = validateCalls(rawCalls, options, registeredSchemas)
+  if (validated === null || validated.skipped.length === 0) return chunks
+
+  const acceptedStreamIndexes = new Set(
+    validated.calls
+      .map(call => call.streamIndex)
+      .filter(Number.isInteger),
+  )
+
+  const out = []
+  const usage = []
+  for (const chunk of chunks) {
+    if (chunk?.type === 'finish') continue
+    if (isUsageChunk(chunk)) {
+      usage.push(chunk)
+      continue
+    }
+    if (isNativeToolChunk(chunk) && !acceptedStreamIndexes.has(chunk.index)) continue
+    out.push(chunk)
+  }
+
+  const feedback = feedbackCall(validated.skipped)
+  let index = maxBlockIndex(out) + 1
+  if (feedback !== null) {
+    out.push({ type: 'block-start', index, blockType: 'tool-call' })
+    out.push({ type: 'tool-call-delta', index, id: feedback.id, name: feedback.name, argumentsDelta: feedback.arguments })
+    out.push({ type: 'block-end', index, block: { type: 'tool-call', id: feedback.id, name: feedback.name, arguments: feedback.arguments } })
+  }
+
+  out.push(...usage)
+  out.push({ type: 'finish', reason: { kind: 'tool-calls' } })
+  return out
+}
+
 function terminalFinish(chunks) {
   for (let i = chunks.length - 1; i >= 0; i -= 1) {
     if (chunks[i]?.type === 'finish') return chunks[i]
@@ -237,7 +301,7 @@ function maxBlockIndex(chunks) {
 }
 
 function transform(chunks, options, registeredSchemas = []) {
-  if (hasNativeToolCall(chunks)) return chunks
+  if (hasNativeToolCall(chunks)) return transformNativeToolCalls(chunks, options, registeredSchemas)
 
   const finish = terminalFinish(chunks)
   if (!finish || finish.reason?.kind !== 'stop') return chunks
@@ -331,5 +395,7 @@ export const _test = {
   parseToolCallText,
   registryVisibleToolSchemas,
   feedbackCall,
+  collectNativeToolCalls,
+  transformNativeToolCalls,
   transform,
 }
