@@ -51,7 +51,7 @@ This bundle intercepts the DSH `llm/stream` seam. If a relay bypasses `llm/strea
 
 ## Version
 
-`0.4.0`
+`0.5.0`
 
 
 ## v0.4 partial-batch policy
@@ -75,3 +75,17 @@ When one or more calls are skipped, the bundle adds an internal `web_relay_compa
 - `initial2024/cs` — independent read-only Gateway V2 QA preset 1.0.0.
 
 The provider is the main route. The compatibility bundle is a defensive fallback for web-relay text tool calls. The QA preset does not modify runtime behavior.
+
+
+## v0.5 native tool-call admission
+
+The compatibility layer now applies the same per-call validation policy to native DSH tool-call streams, not only text-relay formats.
+
+For a native batch:
+- valid calls are preserved unchanged;
+- unavailable tools are removed before the Agent executes them;
+- calls whose arguments fail the real tool JSON Schema are removed before execution;
+- a synthetic `web_relay_compat_feedback` call is appended when anything is skipped;
+- the feedback result is returned to the model on the next turn.
+
+This closes the gap where an invalid native tool call could previously be silently dropped downstream or fail the whole turn with `PI_AI_ERROR: model produced an invalid tool call`.
