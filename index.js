@@ -296,6 +296,7 @@ export function apply(ctx) {
               index: { type: 'number' },
               name: { type: 'string' },
               reason: { type: 'string' },
+              detail: { type: 'string' },
             },
             required: ['index', 'name', 'reason'],
             additionalProperties: false,
@@ -319,7 +320,7 @@ export function apply(ctx) {
   ctx.on('llm/stream', async function* (options, next) {
     const chunks = []
     for await (const chunk of next()) chunks.push(chunk)
-    const registeredNames = registryVisibleToolNames(ctx, options)
+    const registeredSchemas = registryVisibleToolSchemas(ctx, options)
     for (const chunk of transform(chunks, options, registeredSchemas)) yield chunk
   }, { global: true, prepend: true })
 }
