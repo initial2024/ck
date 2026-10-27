@@ -51,4 +51,27 @@ This bundle intercepts the DSH `llm/stream` seam. If a relay bypasses `llm/strea
 
 ## Version
 
-`0.3.0`
+`0.4.0`
+
+
+## v0.4 partial-batch policy
+
+A relayed batch is no longer all-or-nothing.
+
+For every proposed call, the compatibility layer checks:
+
+1. the tool is present in the current request or live DSH Tool Registry;
+2. arguments are a JSON object;
+3. arguments satisfy the tool's real JSON Schema before native execution.
+
+Valid calls are emitted as native DSH tool calls. Invalid/unavailable calls are skipped individually.
+
+When one or more calls are skipped, the bundle adds an internal `web_relay_compat_feedback` call. Its result tells the next model turn exactly which calls were skipped and why (for example `tool_not_available` or `schema_validation_failed`). This prevents one bad call from cancelling other valid calls while still keeping unknown/invalid tools non-executable.
+
+## Recommended three-part installation
+
+- `initial2024/wet` — DSH Web Gateway V2 provider 0.2.1.
+- `initial2024/ck` — relay/native tool-call compatibility and partial-batch recovery 0.4.0.
+- `initial2024/cs` — independent read-only Gateway V2 QA preset 1.0.0.
+
+The provider is the main route. The compatibility bundle is a defensive fallback for web-relay text tool calls. The QA preset does not modify runtime behavior.
