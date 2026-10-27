@@ -1,0 +1,26 @@
+{
+  "name": "dsh-web-relay-toolcall-compat",
+  "version": "0.1.0",
+  "description": "Strict compatibility layer that converts DeepSeek web-relay textual tool-call lines into native DSH tool-call stream chunks.",
+  "type": "module",
+  "main": "index.js",
+  "files": [
+    "index.js",
+    "cordis.patch.yml",
+    "README.md",
+    "LICENSE"
+  ],
+  "keywords": [
+    "deepseek",
+    "dsh",
+    "dsh-plugin",
+    "tool-call",
+    "web-relay"
+  ],
+  "license": "MIT",
+  "dsh": {
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    }
+  }
+}
