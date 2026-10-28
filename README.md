@@ -124,3 +124,12 @@ Safety policy remains fail-closed:
 - malformed machine markup is suppressed instead of leaking into assistant prose, and the next model turn receives `malformed_tool_call_envelope` feedback so it can re-issue valid calls.
 
 The native + textual mixed-stream deduplication introduced in v0.6 remains active.
+
+
+## v0.8 malformed-envelope recovery
+
+- Whole-envelope parse failures no longer synthesize a `web_relay_compat_feedback` tool call. That fallback could itself be rejected as an invalid tool call and end the turn with `PI_AI_ERROR`.
+- Malformed textual protocol now emits terminal `WEB_TOOL_PROTOCOL_MALFORMED`, allowing a provider whose retry policy includes that code to retry the same Agent step.
+- If a response already contains valid native tool calls plus a malformed textual duplicate, the malformed text is suppressed and the valid native calls continue.
+- Zero-width separators around tagged JSON arrays are accepted without changing string contents inside valid JSON.
+- Per-call unknown/schema-invalid handling for otherwise parseable batches remains unchanged.
