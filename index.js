@@ -257,7 +257,7 @@ function parseHybridTaggedToolCalls(text, options, registeredSchemas = []) {
 }
 
 function attributeValue(attrs, name) {
-  const match = new RegExp('(?:^|\\\\s)' + name + '\\\\s*=\\\\s*(["\\\\\\'])(.*?)\\\\1', 'iu').exec(attrs)
+  const match = new RegExp("(?:^|\\\\s)" + name + "\\\\s*=\\\\s*([\"'])(.*?)\\\\1", "iu").exec(attrs)
   return match ? decodeXmlEntities(match[2]) : null
 }
 
