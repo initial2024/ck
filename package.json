@@ -1,7 +1,7 @@
 {
   "name": "dsh-web-relay-toolcall-compat",
-  "version": "0.6.0",
-  "description": "Strict compatibility layer that converts DeepSeek web-relay textual tool-call formats into native DSH tool-call stream chunks.",
+  "version": "0.7.0",
+  "description": "Strict DSH compatibility layer for legacy tagged JSON, DeepSeek DSML, mixed native/text, and malformed relay tool-call recovery.",
   "type": "module",
   "main": "index.js",
   "files": [
