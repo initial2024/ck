@@ -195,7 +195,7 @@ function dsmlClosingNoiseOnly(value) {
 
 function findBalancedJsonArrayEnd(text, start) {
   let i = start
-  while (i < text.length && /\s/u.test(text[i])) i += 1
+  while (i < text.length && /[\s\u200B-\u200D\u2060\uFEFF]/u.test(text[i])) i += 1
   if (text[i] !== '[') return -1
 
   const stack = []
@@ -332,13 +332,9 @@ function looksLikeBrokenToolEnvelope(text) {
 
 function malformedEnvelopeFeedback() {
   return {
+    malformed: true,
     calls: [],
-    skipped: [{
-      index: -1,
-      name: '(tool-call-envelope)',
-      reason: 'malformed_tool_call_envelope',
-      detail: 'Tool-call protocol markup was detected but could not be parsed safely. Re-issue the intended calls using the currently registered tools and valid arguments.',
-    }],
+    skipped: [],
     prose: '',
   }
 }
@@ -492,6 +488,29 @@ function maxBlockIndex(chunks) {
   return max
 }
 
+function malformedToolProtocolFinish() {
+  return {
+    type: 'finish',
+    reason: {
+      kind: 'error',
+      failure: {
+        code: 'WEB_TOOL_PROTOCOL_MALFORMED',
+        message: 'Tool-call protocol markup was detected but could not be parsed safely. The request may be retried without persisting the malformed partial output.',
+      },
+    },
+  }
+}
+
+function suppressMalformedTextKeepNative(chunks, options, registeredSchemas = []) {
+  const kept = [];
+  for (const chunk of chunks) {
+    if (isTextChunk(chunk) || chunk?.type === 'finish') continue
+    kept.push(chunk)
+  }
+  kept.push({ type: 'finish', reason: { kind: 'tool-calls' } })
+  return transformNativeToolCalls(kept, options, registeredSchemas)
+}
+
 function transform(chunks, options, registeredSchemas = []) {
   const nativePresent = hasNativeToolCall(chunks)
   const text = collectCompletedText(chunks)
@@ -507,6 +526,11 @@ function transform(chunks, options, registeredSchemas = []) {
   const parsed = parseToolCallText(text, options, registeredSchemas)
     ?? (looksLikeBrokenToolEnvelope(text) ? malformedEnvelopeFeedback() : null)
   if (parsed === null) return chunks
+
+  if (parsed.malformed === true) {
+    if (nativePresent) return suppressMalformedTextKeepNative(chunks, options, registeredSchemas)
+    return [malformedToolProtocolFinish()]
+  }
 
   const nativeValidated = nativePresent
     ? validateCalls(collectNativeToolCalls(chunks), options, registeredSchemas)
