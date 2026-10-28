@@ -1,6 +1,6 @@
 {
   "name": "dsh-web-relay-toolcall-compat",
-  "version": "0.7.0",
+  "version": "0.8.0",
   "description": "Strict DSH compatibility layer for legacy tagged JSON, DeepSeek DSML, mixed native/text, and malformed relay tool-call recovery.",
   "type": "module",
   "main": "index.js",
