@@ -70,7 +70,7 @@ When one or more calls are skipped, the bundle adds an internal `web_relay_compa
 
 ## Recommended three-part installation
 
-- `initial2024/wet` — DSH Web Gateway V2 provider 0.2.1.
+- `initial2024/wet` — DSH Web Gateway V2 provider 0.4.0.
 - `initial2024/ck` — relay/native tool-call compatibility and partial-batch recovery 0.4.0.
 - `initial2024/cs` — independent read-only Gateway V2 QA preset 1.0.0.
 
@@ -133,3 +133,10 @@ The native + textual mixed-stream deduplication introduced in v0.6 remains activ
 - If a response already contains valid native tool calls plus a malformed textual duplicate, the malformed text is suppressed and the valid native calls continue.
 - Zero-width separators around tagged JSON arrays are accepted without changing string contents inside valid JSON.
 - Per-call unknown/schema-invalid handling for otherwise parseable batches remains unchanged.
+
+
+## Updated DSH ↔ original AI Gateway
+
+For the current original-core integration use `initial2024/wet` v0.4.0. It auto-discovers the original local Gateway on port 1601 and the compatibility fallback on 8787, exposes the four original web-model ids, and protects active webpage generations from generic DSH disconnects.
+
+This `ck` bundle remains the tool-call safety/recovery layer and does not own transport, page input, file upload, conversation rollover, or browser automation.
