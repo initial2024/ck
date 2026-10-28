@@ -8,6 +8,8 @@ const CALL_LINE = /^助手请求调用工具（name=([^,（）\s]+),\s*id=([^（
 const TOOL_CALLS_OPEN = '<tool_calls>'
 const TOOL_CALLS_CLOSE = '</tool_calls>'
 const FEEDBACK_TOOL = 'web_relay_compat_feedback'
+const DSML_MARKER_SOURCE = '(?:｜{1,2}DSML｜{1,2}|\\|{1,2}DSML\\|{1,2})'
+const DSML_TAG_RE = new RegExp('<\\s*(\\/?)\\s*' + DSML_MARKER_SOURCE + '\\s*(tool_calls|calls|invoke|parameter)\\b([^>]*)>', 'giu')
 
 function isPlainObject(value) {
   return value !== null && typeof value === 'object' && !Array.isArray(value)
@@ -167,6 +169,180 @@ function stripJsonFence(value) {
   return match ? match[1] : trimmed
 }
 
+
+function decodeXmlEntities(value) {
+  return value
+    .replace(/&quot;/g, '"')
+    .replace(/&apos;/g, "'")
+    .replace(/&lt;/g, '<')
+    .replace(/&gt;/g, '>')
+    .replace(/&amp;/g, '&')
+}
+
+function normalizeDsmlTags(text) {
+  return text.replace(DSML_TAG_RE, (_match, slash, rawTag, attrs) => {
+    const tag = rawTag === 'calls' ? 'tool_calls' : rawTag
+    return '<' + slash + tag + attrs + '>'
+  })
+}
+
+function dsmlClosingNoiseOnly(value) {
+  const trimmed = value.trim()
+  if (trimmed.length === 0) return true
+  const normalized = normalizeDsmlTags(trimmed)
+  return /^(?:<\/(?:parameter|invoke|tool_calls)>\s*)+$/iu.test(normalized)
+}
+
+function findBalancedJsonArrayEnd(text, start) {
+  let i = start
+  while (i < text.length && /\s/u.test(text[i])) i += 1
+  if (text[i] !== '[') return -1
+
+  const stack = []
+  let inString = false
+  let escaped = false
+  for (; i < text.length; i += 1) {
+    const ch = text[i]
+    if (inString) {
+      if (escaped) {
+        escaped = false
+      } else if (ch === '\\') {
+        escaped = true
+      } else if (ch === '"') {
+        inString = false
+      }
+      continue
+    }
+    if (ch === '"') {
+      inString = true
+      continue
+    }
+    if (ch === '[' || ch === '{') {
+      stack.push(ch)
+      continue
+    }
+    if (ch === ']' || ch === '}') {
+      const expected = ch === ']' ? '[' : '{'
+      if (stack.pop() !== expected) return -1
+      if (stack.length === 0) return i + 1
+    }
+  }
+  return -1
+}
+
+function parseHybridTaggedToolCalls(text, options, registeredSchemas = []) {
+  const open = text.indexOf(TOOL_CALLS_OPEN)
+  if (open === -1) return null
+  if (text.indexOf(TOOL_CALLS_OPEN, open + TOOL_CALLS_OPEN.length) !== -1) return null
+
+  const bodyStart = open + TOOL_CALLS_OPEN.length
+  const bodyEnd = findBalancedJsonArrayEnd(text, bodyStart)
+  if (bodyEnd === -1) return null
+
+  let remainder = text.slice(bodyEnd).trim()
+  if (remainder.startsWith(TOOL_CALLS_CLOSE)) {
+    remainder = remainder.slice(TOOL_CALLS_CLOSE.length).trim()
+  }
+  if (!dsmlClosingNoiseOnly(remainder)) return null
+
+  let rawCalls
+  try {
+    rawCalls = JSON.parse(text.slice(bodyStart, bodyEnd).trim())
+  } catch {
+    return null
+  }
+  const validated = validateCalls(rawCalls, options, registeredSchemas)
+  if (validated === null) return null
+  return { ...validated, prose: text.slice(0, open).trim() }
+}
+
+function attributeValue(attrs, name) {
+  const match = new RegExp('(?:^|\\\\s)' + name + '\\\\s*=\\\\s*(["\\\\\\'])(.*?)\\\\1', 'iu').exec(attrs)
+  return match ? decodeXmlEntities(match[2]) : null
+}
+
+function unwrapCdata(value) {
+  const trimmed = value.trim()
+  const match = /^<!\[CDATA\[([\s\S]*?)\]\]>$/u.exec(trimmed)
+  return match ? match[1] : trimmed
+}
+
+function parseDsmlToolCalls(text, options, registeredSchemas = []) {
+  if (!/(?:｜{1,2}DSML｜{1,2}|\|{1,2}DSML\|{1,2})/u.test(text)) return null
+  const normalized = normalizeDsmlTags(text)
+  const open = normalized.indexOf(TOOL_CALLS_OPEN)
+  if (open === -1) return null
+  const close = normalized.indexOf(TOOL_CALLS_CLOSE, open + TOOL_CALLS_OPEN.length)
+  if (close === -1) return null
+  if (normalized.indexOf(TOOL_CALLS_OPEN, open + TOOL_CALLS_OPEN.length) !== -1) return null
+  if (normalized.indexOf(TOOL_CALLS_CLOSE, close + TOOL_CALLS_CLOSE.length) !== -1) return null
+
+  const body = normalized.slice(open + TOOL_CALLS_OPEN.length, close)
+  const rawCalls = []
+  const invokeRe = /<invoke\b([^>]*)>([\s\S]*?)<\/invoke>/giu
+  let cursor = 0
+  let invoke
+  while ((invoke = invokeRe.exec(body)) !== null) {
+    if (body.slice(cursor, invoke.index).trim() !== '') return null
+    cursor = invokeRe.lastIndex
+    const name = attributeValue(invoke[1], 'name')
+    if (!name) return null
+
+    const args = {}
+    const paramBody = invoke[2]
+    const paramRe = /<parameter\b([^>]*)>([\s\S]*?)<\/parameter>/giu
+    let paramCursor = 0
+    let parameter
+    while ((parameter = paramRe.exec(paramBody)) !== null) {
+      if (paramBody.slice(paramCursor, parameter.index).trim() !== '') return null
+      paramCursor = paramRe.lastIndex
+      const paramName = attributeValue(parameter[1], 'name')
+      const stringFlag = attributeValue(parameter[1], 'string')
+      if (!paramName || (stringFlag !== 'true' && stringFlag !== 'false')) return null
+      if (Object.prototype.hasOwnProperty.call(args, paramName)) return null
+
+      const rawValue = unwrapCdata(parameter[2])
+      if (stringFlag === 'true') {
+        args[paramName] = decodeXmlEntities(rawValue)
+      } else {
+        try {
+          args[paramName] = JSON.parse(decodeXmlEntities(rawValue))
+        } catch {
+          return null
+        }
+      }
+    }
+    if (paramBody.slice(paramCursor).trim() !== '') return null
+    rawCalls.push({ name, arguments: args })
+  }
+  if (body.slice(cursor).trim() !== '' || rawCalls.length === 0) return null
+
+  const validated = validateCalls(rawCalls, options, registeredSchemas)
+  if (validated === null) return null
+  const before = normalized.slice(0, open).trim()
+  const after = normalized.slice(close + TOOL_CALLS_CLOSE.length).trim()
+  return { ...validated, prose: [before, after].filter(Boolean).join('\n\n') }
+}
+
+function looksLikeBrokenToolEnvelope(text) {
+  const trimmed = text.trimStart()
+  if (trimmed.startsWith(TOOL_CALLS_OPEN)) return true
+  return /^<\s*(?:｜{1,2}DSML｜{1,2}|\|{1,2}DSML\|{1,2})\s*(?:tool_calls|calls)\b/iu.test(trimmed)
+}
+
+function malformedEnvelopeFeedback() {
+  return {
+    calls: [],
+    skipped: [{
+      index: -1,
+      name: '(tool-call-envelope)',
+      reason: 'malformed_tool_call_envelope',
+      detail: 'Tool-call protocol markup was detected but could not be parsed safely. Re-issue the intended calls using the currently registered tools and valid arguments.',
+    }],
+    prose: '',
+  }
+}
+
 function parseTaggedToolCalls(text, options, registeredSchemas = []) {
   const open = text.indexOf(TOOL_CALLS_OPEN)
   if (open === -1) return null
@@ -186,7 +362,8 @@ function parseTaggedToolCalls(text, options, registeredSchemas = []) {
   if (validated === null) return null
 
   const before = text.slice(0, open).trim()
-  const after = text.slice(close + TOOL_CALLS_CLOSE.length).trim()
+  const rawAfter = text.slice(close + TOOL_CALLS_CLOSE.length).trim()
+  const after = dsmlClosingNoiseOnly(rawAfter) ? '' : rawAfter
   const prose = [before, after].filter(Boolean).join('\n\n')
   return { ...validated, prose }
 }
@@ -194,6 +371,8 @@ function parseTaggedToolCalls(text, options, registeredSchemas = []) {
 function parseToolCallText(text, options, registeredSchemas = []) {
   return parseLegacyToolCalls(text, options, registeredSchemas)
     ?? parseTaggedToolCalls(text, options, registeredSchemas)
+    ?? parseHybridTaggedToolCalls(text, options, registeredSchemas)
+    ?? parseDsmlToolCalls(text, options, registeredSchemas)
 }
 
 function collectCompletedText(chunks) {
@@ -326,6 +505,7 @@ function transform(chunks, options, registeredSchemas = []) {
   if (text === null) return chunks
 
   const parsed = parseToolCallText(text, options, registeredSchemas)
+    ?? (looksLikeBrokenToolEnvelope(text) ? malformedEnvelopeFeedback() : null)
   if (parsed === null) return chunks
 
   const nativeValidated = nativePresent
@@ -439,7 +619,11 @@ export function apply(ctx) {
 export const _test = {
   parseLegacyToolCalls,
   parseTaggedToolCalls,
+  parseHybridTaggedToolCalls,
+  parseDsmlToolCalls,
   parseToolCallText,
+  normalizeDsmlTags,
+  looksLikeBrokenToolEnvelope,
   registryVisibleToolSchemas,
   feedbackCall,
   normalizedCallKey,
