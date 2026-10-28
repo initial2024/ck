@@ -164,8 +164,8 @@ function parseLegacyToolCalls(text, options, registeredSchemas = []) {
 }
 
 function stripJsonFence(value) {
-  const trimmed = value.trim()
-  const match = /^```(?:json)?\s*([\s\S]*?)\s*```$/i.exec(trimmed)
+  const trimmed = value.trim().replace(/^[\u200B-\u200D\u2060\uFEFF]+|[\u200B-\u200D\u2060\uFEFF]+$/gu, '')
+  const match = /^\`\`\`(?:json)?\s*([\s\S]*?)\s*\`\`\`$/i.exec(trimmed)
   return match ? match[1] : trimmed
 }
 
@@ -247,7 +247,7 @@ function parseHybridTaggedToolCalls(text, options, registeredSchemas = []) {
 
   let rawCalls
   try {
-    rawCalls = JSON.parse(text.slice(bodyStart, bodyEnd).trim())
+    rawCalls = JSON.parse(text.slice(bodyStart, bodyEnd).trim().replace(/^[\u200B-\u200D\u2060\uFEFF]+/u, ''))
   } catch {
     return null
   }
