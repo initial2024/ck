@@ -43,7 +43,7 @@ Some Android DSH builds cannot execute `git` and fail GitHub installs with `spaw
 https://github.com/initial2024/ck/archive/refs/heads/main.tar.gz
 ```
 
-Paste that exact plain-text URL into **Add plugin → package name or address**. Do not append query parameters. If an older version is already installed, uninstall it first, install 0.3.0, then enable/restart the Web profile as requested by DSH.
+Paste that exact plain-text URL into **Add plugin → package name or address**. Do not append query parameters. If an older version is already installed, uninstall it first, install 0.7.0, then enable/restart the Web profile as requested by DSH.
 
 ## Important boundary
 
@@ -51,7 +51,7 @@ This bundle intercepts the DSH `llm/stream` seam. If a relay bypasses `llm/strea
 
 ## Version
 
-`0.6.0`
+`0.7.0`
 
 
 ## v0.4 partial-batch policy
@@ -104,3 +104,23 @@ v0.6 merges both representations safely:
 - raw `<tool_calls>` text is removed from the final conversation stream.
 
 Regression coverage now includes text-only, native-only, and mixed native+text batches.
+
+
+## v0.7 DeepSeek DSML compatibility
+
+DeepSeek V4-family routes may emit DSML tool markup instead of native DSH tool-call chunks. v0.7 adds strict support for:
+
+- canonical full-width DSML: `<｜DSML｜tool_calls>`, `invoke`, and `parameter`;
+- degraded ASCII DSML markers such as `<||DSML||tool_calls>`;
+- the hybrid Web Gateway form observed in practice: a legacy `<tool_calls>[JSON]` payload followed by residual DSML closing markers;
+- malformed protocol envelopes.
+
+Safety policy remains fail-closed:
+
+- every recovered call is still checked against the current request / live DSH Tool Registry;
+- argument objects are still validated against the real tool JSON Schema;
+- unknown or invalid individual calls are skipped and reported through `web_relay_compat_feedback`;
+- a malformed whole envelope is never executed speculatively;
+- malformed machine markup is suppressed instead of leaking into assistant prose, and the next model turn receives `malformed_tool_call_envelope` feedback so it can re-issue valid calls.
+
+The native + textual mixed-stream deduplication introduced in v0.6 remains active.
